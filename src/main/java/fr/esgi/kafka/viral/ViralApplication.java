@@ -32,6 +32,11 @@ public final class ViralApplication {
         props.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG,
                 Serdes.String().getClass());
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        // Etat local dans le projet plutot que dans le dossier temporaire du
+        // systeme (chemin illisible et different sur chaque machine). Un
+        // "rm -rf state/" suffit alors a repartir de zero : sans ca, un vieil
+        // etat oublie fait s'additionner les compteurs d'un run a l'autre.
+        props.put(StreamsConfig.STATE_DIR_CONFIG, "state");
         // Bonus fiabilite : processing.guarantee=exactly_once_v2 (cf. README)
 
         StreamsBuilder builder = new StreamsBuilder();

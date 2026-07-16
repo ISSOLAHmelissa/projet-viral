@@ -7,3 +7,6 @@ target/
 # Jeu de donnees (420 Mo) : ne se versionne pas
 generateurs-v3/
 .venv-rejeu/
+
+# Etat local de Kafka Streams (RocksDB)
+state/
