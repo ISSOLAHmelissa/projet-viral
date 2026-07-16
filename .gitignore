@@ -4,9 +4,12 @@ target/
 .idea/
 *.iml
 
-# Jeu de donnees (420 Mo) : ne se versionne pas
-generateurs-v3/
 .venv-rejeu/
+
+# Generateur : on ne versionne QUE le necessaire au projet VIRAL.
+# Les donnees des 8 autres projets (380 Mo) restent dehors.
+generateurs-v3/data/*
+!generateurs-v3/data/viral/
 
 # Etat local de Kafka Streams (RocksDB)
 state/

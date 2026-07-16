@@ -14,11 +14,11 @@
 # 1. Le cluster local (3 brokers + Kafbat UI sur http://localhost:8080)
 docker compose up -d
 
-# 2. Injecter les données (script officiel, depuis generateurs-v3/)
-cd ../generateurs-v3
+# 2. Injecter les données (script officiel, versionne dans generateurs-v3/)
+cd generateurs-v3
 python rejouer.py --dossier data/viral --project viral \
     --create-topics --replication-factor 1 --bootstrap localhost:29092
-cd ../projet-viral
+cd ..
 
 # 3. Lancer l'appli
 GROUPE=grp06 KAFKA_BOOTSTRAP=localhost:29092 mvn compile exec:java
@@ -26,8 +26,16 @@ GROUPE=grp06 KAFKA_BOOTSTRAP=localhost:29092 mvn compile exec:java
 # 4. Regarder les sorties : http://localhost:8080 -> Topics -> grp06.*
 ```
 
-Prérequis du rejeu : `pip install confluent-kafka` (voir
-`generateurs-v3/requirements.txt`).
+Prérequis du rejeu : un venv Python avec `confluent-kafka` (voir
+`generateurs-v3/requirements.txt`) :
+
+```bash
+python3 -m venv .venv-rejeu
+.venv-rejeu/bin/pip install -r generateurs-v3/requirements.txt
+```
+
+Le jeu de données `viral` (39 Mo) **est versionné** dans `generateurs-v3/data/viral`
+— rien à récupérer ailleurs. Les données des 8 autres projets sont exclues.
 
 ### Repartir de zéro
 
