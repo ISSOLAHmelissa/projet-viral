@@ -3,3 +3,7 @@ target/
 .vscode/
 .idea/
 *.iml
+
+# Jeu de donnees (420 Mo) : ne se versionne pas
+generateurs-v3/
+.venv-rejeu/
