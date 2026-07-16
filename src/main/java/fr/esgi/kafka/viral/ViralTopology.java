@@ -7,6 +7,8 @@ import fr.esgi.kafka.viral.common.Validator;
 import fr.esgi.kafka.viral.model.Interaction;
 import fr.esgi.kafka.viral.model.Post;
 import fr.esgi.kafka.viral.model.Trend;
+import fr.esgi.kafka.viral.model.ViralAlert;
+import fr.esgi.kafka.viral.model.ViralCount;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -19,6 +21,7 @@ import org.apache.kafka.streams.KeyValue;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.kstream.Branched;
 import org.apache.kafka.streams.kstream.Consumed;
+import org.apache.kafka.streams.kstream.GlobalKTable;
 import org.apache.kafka.streams.kstream.Grouped;
 import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.kstream.Materialized;
@@ -34,6 +37,9 @@ public final class ViralTopology {
 
     /** Les hashtags sont dans le texte : "Best moment #paris #photo". */
     private static final Pattern HASHTAG = Pattern.compile("#([a-z0-9]+)");
+
+    /** VIR-3 : au-dela de ce nombre d'interactions sur 5 min, le post est viral. */
+    private static final long SEUIL_VIRAL = 200;
 
     private ViralTopology() {
     }
@@ -62,13 +68,21 @@ public final class ViralTopology {
         KStream<String, Interaction> interactions =
                 ingest(rawInteractions, Topics.INTERACTIONS, Validator::checkInteraction, "interactions");
 
+        // Referentiel des posts VALIDES, pour la jointure de VIR-3. Un post
+        // rejete en DLQ n'y entre pas, donc il n'enrichira aucune alerte.
+        posts.to(Topics.POSTS_REF,
+                Produced.with(Serdes.String(), JsonSerdes.of(Post.class)));
+
         // -----------------------------------------------------------------
         // VIR-2 - Top hashtags
         // -----------------------------------------------------------------
         trendingHashtags(posts);
 
-        // VIR-3 - Detection de post viral (+ enrichissement via table posts)
-        //                                                    -> Topics.ALERTS_VIRAL
+        // -----------------------------------------------------------------
+        // VIR-3 - Detection de post viral
+        // -----------------------------------------------------------------
+        detectionPostViral(builder, interactions);
+
         // VIR-4 - Engagement par auteur (jointure interactions x posts)
         //                                                    -> Topics.ENGAGEMENT_BY_AUTHOR
         // VIR-5 - Detection de bots                          -> Topics.ALERTS_BOTS
@@ -116,6 +130,76 @@ public final class ViralTopology {
                                 fenetre.window().endTime().toString()))))
 
                 .to(Topics.TRENDS, Produced.with(Serdes.String(), Serdes.String()));
+    }
+
+    /**
+     * VIR-3 - Alerte quand un post depasse SEUIL_VIRAL interactions sur une
+     * fenetre de 5 min, enrichie avec l'auteur et le texte du post.
+     */
+    private static void detectionPostViral(StreamsBuilder builder,
+                                           KStream<String, Interaction> interactions) {
+
+        // GlobalKTable et non KTable. Une KTable exigerait que les deux cotes
+        // soient CO-PARTITIONNES, ce qui est faux ici pour DEUX raisons :
+        //   1. viral.posts a 3 partitions, viral.interactions en a 6 ;
+        //   2. le generateur produit en CRC32 (librdkafka) alors que tout
+        //      repartitionnement de Kafka Streams utilise murmur2 : le post
+        //      serait cherche sur une partition ou il n'est pas. Kafka Streams
+        //      ne verifie que le NOMBRE de partitions, pas le hachage : la
+        //      jointure ne leve aucune erreur, elle rate silencieusement.
+        // Une GlobalKTable n'est pas partitionnee : chaque instance en detient
+        // une copie complete et la recherche se fait par cle. Les deux
+        // problemes disparaissent. Prix a payer : la table entiere en memoire
+        // (~10 000 posts ici, negligeable).
+        GlobalKTable<String, Post> referentielPosts = builder.globalTable(
+                Topics.POSTS_REF,
+                Consumed.with(Serdes.String(), JsonSerdes.of(Post.class)));
+
+        interactions
+                // La cle est deja post_id : aucun changement de cle ici, donc
+                // aucun repartitionnement.
+                .groupByKey(Grouped.with(Serdes.String(), JsonSerdes.of(Interaction.class)))
+
+                // Grace courte, a l'inverse de VIR-2 : une alerte qui arrive
+                // 3 h apres l'incident ne sert a rien. Une tendance passee
+                // doit etre exacte, une alerte doit etre rapide.
+                .windowedBy(TimeWindows
+                        .ofSizeAndGrace(Duration.ofMinutes(5), Duration.ofMinutes(1)))
+                .count(Materialized.as("viral-counts"))
+
+                .toStream()
+                .filter((fenetre, compte) -> compte != null && compte > SEUIL_VIRAL)
+
+                // On quitte la cle fenetree pour revenir a post_id, seule cle
+                // qui permet de joindre le referentiel.
+                .map((fenetre, compte) -> KeyValue.pair(
+                        fenetre.key(),
+                        new ViralCount(
+                                fenetre.key(),
+                                compte,
+                                fenetre.window().startTime().toString(),
+                                fenetre.window().endTime().toString())))
+
+                // Jointure : on va chercher l'auteur et le texte, que
+                // l'interaction ne porte pas.
+                //
+                // leftJoin et non join : un post dont la fiche est partie en
+                // DLQ ou absente du referentiel ferait PERDRE l'alerte avec un
+                // join - on raterait un post viral a cause d'une fiche mal
+                // formee. L'alerte est le signal, l'enrichissement n'est qu'un
+                // confort : on emet, avec auteur/texte a null.
+                .leftJoin(referentielPosts,
+                        // Ou aller chercher la cle dans la table globale.
+                        (postId, compte) -> postId,
+                        (compte, post) -> JsonSerdes.toJson(new ViralAlert(
+                                compte.postId(),
+                                post == null ? null : post.userId(),
+                                post == null ? null : post.text(),
+                                compte.count(),
+                                compte.windowStart(),
+                                compte.windowEnd())))
+
+                .to(Topics.ALERTS_VIRAL, Produced.with(Serdes.String(), Serdes.String()));
     }
 
     private static List<String> extraireHashtags(String texte) {

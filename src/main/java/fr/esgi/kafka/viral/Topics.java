@@ -22,6 +22,13 @@ public final class Topics {
         return GROUPE + "." + suffix;
     }
 
+    /**
+     * Referentiel interne : les posts VALIDES, republies dans notre espace de
+     * noms. Necessaire car Kafka Streams interdit de lire viral.posts a la
+     * fois en KStream (VIR-1/VIR-2) et en GlobalKTable (VIR-3).
+     */
+    public static final String POSTS_REF = out("viral.posts.ref");
+
     // --- Sorties (a produire par votre application) ---
     public static final String DLQ = out("viral.dlq");
     public static final String TRENDS = out("viral.trends");
